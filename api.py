@@ -35,19 +35,40 @@ def __wrapped_method__(fun):
 def __add_encoders__(encoders):
     ENCODERS_BY_TYPE.update(encoders)
 
-def create_api(obj, root='/', exclude=[], encoders={}):
+# Delete doesn't work quite right
+# I think it has a problem with *args
+def DEFAULT_DETERMINATOR(fun_name, fun):
+    sig = signature(fun)
+    if fun_name in ['delete', 'remove', 'del', 'rm']:
+        return 'delete'
+    if fun_name in ['get', 'list']:
+        return 'get'
+    if any(map(lambda p: p[1].kind == Parameter.VAR_KEYWORD or p[1].kind == Parameter.VAR_POSITIONAL, sig.parameters.items())):
+        return 'post'
+    lines, _ = getsourcelines(fun)
+    if any(map(lambda l: 'return' in l, lines)):
+        return 'post'
+    return 'get'
+
+def create_api(obj, root='/', exclude=[], encoders={}, determinator=DEFAULT_DETERMINATOR):
     __add_encoders__(encoders)
     for public_name in filter(lambda name: name[0] != '_' and not name in exclude, dir(obj)):
         attr = getattr(obj, public_name)
         if ismethod(attr):
             method = __wrapped_method__(attr)
-            endpoints[f'{root}{public_name}'] = create_endpoint(public_name, method, root=root)
+            endpoints[f'{root}{public_name}'] = create_endpoint(public_name, method, root=root, determinator=determinator)
         elif callable(attr):
             create_api(attr, root=f'/{public_name}/')
     return app
 
-# Need a good way to figure out which endpoints should be what method
-# If they have/need/use kwargs, then it needs to be post or put
-def create_endpoint(fun_name, method, root='/'):
+def create_endpoint(fun_name, method, root, determinator):
     path = f'{root}{fun_name}'
-    app.post(path)(method)
+    {
+        'post': app.post,
+        'get': app.get,
+        'put': app.put,
+        'delete': app.delete,
+        'options': app.options,
+        'head': app.head,
+        'patch': app.patch,
+    }[determinator(fun_name, method)](path)(method)
